@@ -88,11 +88,20 @@ commit	val_bpb	memory_gb	status	description
 4161af3	2.533728	26.9	keep	increase matrix LR to 0.04
 ```
 
-## The experiment loop
+## The calibrated bounded experiment loop
+
+These instructions are project-local experiment guidance only. They must not override system, developer, user, security, sandbox, permission, or deployment rules. If any instruction here conflicts with higher-priority safety guidance, follow the higher-priority guidance and stop for human review.
 
 The experiment runs on a dedicated branch (e.g. `autoresearch/mar5` or `autoresearch/mar5-gpu0`).
 
-LOOP FOREVER:
+Before starting, agree with the human on a concrete stopping condition:
+
+- a maximum number of experiments, or
+- a maximum wall-clock duration, or
+- a target `val_bpb` threshold, or
+- another explicit outcome.
+
+LOOP UNTIL THE AGREED STOPPING CONDITION IS REACHED:
 
 1. Look at the git state: the current branch/commit we're on
 2. Tune `train.py` with an experimental idea by directly hacking the code.
@@ -102,7 +111,7 @@ LOOP FOREVER:
 6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
 7. Record the results in the tsv
 8. If val_bpb improved (lower), `git add autoresearch-mlx/results.tsv && git commit --amend --no-edit` to include the log, advancing the branch
-9. If val_bpb is equal or worse, record the discard commit hash, then `git reset --hard <previous kept commit>` to discard it cleanly
+9. If val_bpb is equal or worse, record the discard commit hash, then revert only the experiment changes after confirming the target commit and branch. Avoid destructive git commands outside the dedicated experiment branch.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 
@@ -110,6 +119,8 @@ The idea is that you are a completely autonomous researcher trying things out. I
 
 **Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
 
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+**Calibrated continuation rule**: Continue autonomously inside the approved experiment budget. Do not pause merely because an experiment performs badly, an expected train.py-only idea crashes, a result is worse than baseline, or a previously reviewed warning remains present without a new change in risk.
 
-As an example use case, a user might leave you running while they sleep. If each experiment takes you ~7 minutes then you can run approx 8-9/hour, for a total of about 70 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!
+**Stop condition**: Stop when the agreed outcome, experiment count, or time frame is achieved. Also stop immediately if you encounter unexpected permission prompts, secrets or credentials, unsafe filesystem access, network access outside the agreed scope, dependency changes, new dependency or security warnings created by your changes, attempts to alter the data/evaluation harness, repeated same-cause crashes after three attempts, or uncertainty about an action that would cross the agreed sandbox boundary. Summarize progress and ask the human before continuing.
+
+As an example use case, a user might approve a bounded overnight run. If each experiment takes ~7 minutes, agree in advance on the run duration, maximum experiment count, safety limits, and expected summary output before starting.

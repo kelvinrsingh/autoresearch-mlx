@@ -10,9 +10,10 @@ Data and tokenizer are stored in ~/.cache/autoresearch/.
 """
 
 import argparse
+import base64
+import json
 import math
 import os
-import pickle
 import sys
 import time
 from multiprocessing import Pool
@@ -134,11 +135,11 @@ def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
 
 
 def train_tokenizer():
-    """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
-    tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
+    """Train BPE tokenizer using rustbpe, save as a safe JSON manifest."""
+    tokenizer_json = os.path.join(TOKENIZER_DIR, "tokenizer.json")
     token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.npy")
 
-    if os.path.exists(tokenizer_pkl) and os.path.exists(token_bytes_path):
+    if os.path.exists(tokenizer_json) and os.path.exists(token_bytes_path):
         print(f"Tokenizer: already trained at {TOKENIZER_DIR}")
         return
 
@@ -167,11 +168,10 @@ def train_tokenizer():
         special_tokens=special_tokens,
     )
 
-    with open(tokenizer_pkl, "wb") as handle:
-        pickle.dump(enc, handle)
+    save_tokenizer_encoding(enc, tokenizer_json)
 
     t1 = time.time()
-    print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_pkl}")
+    print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_json}")
 
     print("Tokenizer: building token_bytes lookup...")
     special_set = set(SPECIAL_TOKENS)
@@ -193,6 +193,47 @@ def train_tokenizer():
     print(f"Tokenizer: sanity check passed (vocab_size={enc.n_vocab})")
 
 
+def save_tokenizer_encoding(enc, path):
+    """Persist tokenizer state without pickle or executable deserialization."""
+    payload = {
+        "format": "autoresearch-tokenizer-json-v1",
+        "name": enc.name,
+        "pat_str": enc._pat_str,
+        "mergeable_ranks": {
+            base64.b64encode(token_bytes).decode("ascii"): rank
+            for token_bytes, rank in enc._mergeable_ranks.items()
+        },
+        "special_tokens": enc._special_tokens,
+    }
+    temp_path = path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+    os.replace(temp_path, path)
+
+
+def load_tokenizer_encoding(path):
+    """Load tokenizer state from the JSON manifest with basic schema checks."""
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if payload.get("format") != "autoresearch-tokenizer-json-v1":
+        raise ValueError(f"Unsupported tokenizer format in {path}")
+    required = ["name", "pat_str", "mergeable_ranks", "special_tokens"]
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError(f"Tokenizer manifest missing keys: {missing}")
+    mergeable_ranks = {
+        base64.b64decode(token_b64.encode("ascii"), validate=True): int(rank)
+        for token_b64, rank in payload["mergeable_ranks"].items()
+    }
+    special_tokens = {str(token): int(rank) for token, rank in payload["special_tokens"].items()}
+    return tiktoken.Encoding(
+        name=str(payload["name"]),
+        pat_str=str(payload["pat_str"]),
+        mergeable_ranks=mergeable_ranks,
+        special_tokens=special_tokens,
+    )
+
+
 class Tokenizer:
     """Minimal tokenizer wrapper. Training is handled above."""
 
@@ -202,8 +243,7 @@ class Tokenizer:
 
     @classmethod
     def from_directory(cls, tokenizer_dir=TOKENIZER_DIR):
-        with open(os.path.join(tokenizer_dir, "tokenizer.pkl"), "rb") as handle:
-            enc = pickle.load(handle)
+        enc = load_tokenizer_encoding(os.path.join(tokenizer_dir, "tokenizer.json"))
         return cls(enc)
 
     def get_vocab_size(self):
